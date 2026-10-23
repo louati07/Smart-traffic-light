@@ -1,0 +1,112 @@
+[
+  {
+    "delay_s": 0.5,
+    "camera_id": "cam-N",
+    "approach": "N",
+    "class": "vehicle",
+    "confidence": 0.88,
+    "bbox_area_ratio": 0.035,
+    "frame_id": 10,
+    "confirmed": false
+  },
+  {
+    "delay_s": 0.5,
+    "camera_id": "cam-N",
+    "approach": "N",
+    "class": "vehicle",
+    "confidence": 0.84,
+    "bbox_area_ratio": 0.040,
+    "frame_id": 20,
+    "confirmed": false
+  },
+  {
+    "delay_s": 1.0,
+    "camera_id": "cam-N",
+    "approach": "N",
+    "class": "ambulance",
+    "confidence": 0.72,
+    "bbox_area_ratio": 0.012,
+    "frame_id": 30,
+    "confirmed": false
+  },
+  {
+    "delay_s": 0.3,
+    "camera_id": "cam-N",
+    "approach": "N",
+    "class": "ambulance",
+    "confidence": 0.81,
+    "bbox_area_ratio": 0.018,
+    "frame_id": 33,
+    "confirmed": false
+  },
+  {
+    "delay_s": 0.3,
+    "camera_id": "cam-N",
+    "approach": "N",
+    "class": "ambulance",
+    "confidence": 0.89,
+    "bbox_area_ratio": 0.024,
+    "frame_id": 36,
+    "confirmed": false
+  },
+  {
+    "delay_s": 0.3,
+    "camera_id": "cam-N",
+    "approach": "N",
+    "class": "ambulance",
+    "confidence": 0.92,
+    "bbox_area_ratio": 0.032,
+    "frame_id": 39,
+    "confirmed": false
+  },
+  {
+    "delay_s": 0.3,
+    "camera_id": "cam-N",
+    "approach": "N",
+    "class": "ambulance",
+    "confidence": 0.96,
+    "bbox_area_ratio": 0.045,
+    "frame_id": 42,
+    "confirmed": true
+  },
+  {
+    "delay_s": 1.0,
+    "camera_id": "cam-N",
+    "approach": "N",
+    "class": "ambulance",
+    "confidence": 0.95,
+    "bbox_area_ratio": 0.060,
+    "frame_id": 52,
+    "confirmed": true
+  },
+  {
+    "delay_s": 1.0,
+    "camera_id": "cam-N",
+    "approach": "N",
+    "class": "ambulance",
+    "confidence": 0.94,
+    "bbox_area_ratio": 0.075,
+    "frame_id": 62,
+    "confirmed": true
+  },
+  {
+    "delay_s": 1.5,
+    "camera_id": "cam-N",
+    "approach": "N",
+    "class": "ambulance",
+    "confidence": 0.91,
+    "bbox_area_ratio": 0.090,
+    "frame_id": 77,
+    "confirmed": true
+  },
+  {
+    "delay_s": 2.0,
+    "camera_id": "cam-N",
+    "approach": "N",
+    "class": "vehicle",
+    "confidence": 0.80,
+    "bbox_area_ratio": 0.020,
+    "frame_id": 97,
+    "confirmed": false
+  }
+]

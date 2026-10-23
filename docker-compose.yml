@@ -1,0 +1,65 @@
+version: "3.8"
+
+services:
+  mongo:
+    image: mongo:7
+    container_name: smart_intersection_mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    container_name: smart_intersection_api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - MONGO_URI=mongodb://mongo:27017
+      - MONGO_DB=smart_intersection
+      - MONGO_MODE=mongo
+      - FIREBASE_MODE=memory
+      - ESP32_MODE=mock
+      - JWT_SECRET=dev-jwt-secret-do-not-use-in-production-abcdef123456
+      - HMAC_SECRET=dev-hmac-shared-key-wokwi-server-2026
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: smart_intersection_web
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
+
+  vision:
+    profiles: ["vision"]
+    build:
+      context: .
+      dockerfile: vision/Dockerfile
+    container_name: smart_intersection_vision
+    restart: "no"
+    environment:
+      - API_URL=http://api:8000/api/v1
+      - VISION_MODE=replay
+    depends_on:
+      - api
+
+volumes:
+  mongo_data:

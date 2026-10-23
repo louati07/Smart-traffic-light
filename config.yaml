@@ -1,0 +1,40 @@
+intersection:
+  id: "i1"
+  name: "Smart Intersection Digital Twin"
+
+timings:
+  green_ms: 10000
+  yellow_ms: 3000
+  all_red_ms: 2000
+  min_green_ms: 5000
+  priority_max_ms: 30000
+  heartbeat_timeout_ms: 10000
+  poll_ms: 700
+  command_ttl_s: 15
+
+vision:
+  model_weights: "vision/weights/best.pt"
+  imgsz: 640
+  stride: 3
+  target_fps: 8
+  conf_threshold: 0.55
+  bbox_area_ratio_min: 0.005
+  debounce_window_w: 8
+  debounce_confirm_k: 5
+  release_after_s: 3.0
+  classes:
+    0: "ambulance"
+    1: "fire_truck"
+    2: "police_car"
+    3: "vehicle"
+
+engine:
+  priority_cooldown_s: 2.0
+  priority_conflict_max_wait_s: 15.0
+
+sim:
+  tick_s: 0.5
+  arrival_rate_per_approach: 0.1
+  departure_headway_s: 2.0
+  detect_lead_s: 8.0
+  command_latency_s: 1.5

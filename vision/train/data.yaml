@@ -1,0 +1,11 @@
+# YOLOv8 / YOLO11 Dataset Configuration for Smart Intersection
+path: ../data/processed_yolo
+train: images/train
+val: images/val
+test: images/test
+
+names:
+  0: ambulance
+  1: fire_truck
+  2: police_car
+  3: vehicle
