@@ -12,11 +12,19 @@ Contract (PLAN.md Section 8 P4):
 import argparse
 import json
 import logging
+import sys
 import time
 from pathlib import Path
 from typing import Any
 
 import httpx
+import yaml
+
+# Support both `python -m vision.worker` and `python vision/worker.py` from
+# the repository root by making the project package importable in either form.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from vision.debounce import DebounceFilter
 from vision.replay import run_replay
@@ -46,6 +54,11 @@ class VisionWorker:
         imgsz: int = 640,
         camera_user: str = "camera",
         camera_pass: str = "camera123",
+        debounce_window_w: int = 8,
+        debounce_confirm_k: int = 5,
+        bbox_area_ratio_min: float = 0.005,
+        release_after_s: float = 3.0,
+        class_mapping: dict[int, str] | None = None,
     ) -> None:
         self.weights_path = weights_path
         self.api_url = api_url
@@ -56,13 +69,14 @@ class VisionWorker:
         self.imgsz = imgsz
         self.camera_user = camera_user
         self.camera_pass = camera_pass
+        self.class_mapping = class_mapping or CLASS_MAPPING
 
         self.debounce = DebounceFilter(
-            window_w=8,
-            confirm_k=5,
+            window_w=debounce_window_w,
+            confirm_k=debounce_confirm_k,
             min_confidence=conf_threshold,
-            min_bbox_area_ratio=0.005,
-            release_after_s=3.0,
+            min_bbox_area_ratio=bbox_area_ratio_min,
+            release_after_s=release_after_s,
         )
 
         self.token: str | None = None
@@ -150,7 +164,7 @@ class VisionWorker:
                 for r in results:
                     for box in r.boxes:
                         cls_id = int(box.cls[0].item())
-                        cls_name = CLASS_MAPPING.get(cls_id, "vehicle")
+                        cls_name = self.class_mapping.get(cls_id, "vehicle")
                         conf = float(box.conf[0].item())
                         xyxy = box.xyxy[0].tolist()
                         box_area = (xyxy[2] - xyxy[0]) * (xyxy[3] - xyxy[1])
@@ -189,7 +203,31 @@ class VisionWorker:
                 # Post to backend
                 if self.token:
                     try:
-                        http_client.post(f"{self.api_url}/detections", json=payload, headers=headers)
+                        response = http_client.post(
+                            f"{self.api_url}/detections",
+                            json=payload,
+                            headers=headers,
+                        )
+                        if response.is_success:
+                            result = response.json()
+                            action = result.get("action")
+                            action_name = action.get("cmd") if isinstance(action, dict) else "none"
+                            logger.info(
+                                "Frame %d: %s on %s (confidence=%.2f, confirmed=%s) -> %s",
+                                payload["frame_id"],
+                                payload["class"],
+                                payload["approach"],
+                                payload["confidence"],
+                                payload["confirmed"],
+                                action_name,
+                            )
+                        else:
+                            logger.warning(
+                                "Detection rejected for frame %d: HTTP %d %s",
+                                payload["frame_id"],
+                                response.status_code,
+                                response.text[:300],
+                            )
                     except Exception as e:
                         logger.warning("Error posting detection: %s", e)
 
@@ -203,29 +241,54 @@ class VisionWorker:
 
 
 def main():
+    project_root = Path(__file__).resolve().parent.parent
+    config_path = project_root / "config.yaml"
+    with config_path.open("r", encoding="utf-8") as config_file:
+        vision_config = (yaml.safe_load(config_file) or {}).get("vision", {})
+
     parser = argparse.ArgumentParser(description="Emergency vehicle vision worker")
     parser.add_argument("--mode", choices=["live", "replay"], default="replay")
     parser.add_argument("--video", default="0", help="Video file or camera index")
-    parser.add_argument("--weights", default="vision/weights/best.pt")
+    parser.add_argument("--max-frames", type=int, default=1000, help="Maximum frames to inspect for a bounded demo run")
+    parser.add_argument("--weights", default=None)
     parser.add_argument("--replay-file", default="data/replay/demo_ambulance_north.json")
     parser.add_argument("--api-url", default="http://localhost:8000/api/v1")
     parser.add_argument("--approach", default="N")
     parser.add_argument("--dump-replay", default=None, help="Save live run detections to JSON")
+    parser.add_argument("--imgsz", type=int, default=None)
+    parser.add_argument("--stride", type=int, default=None)
+    parser.add_argument("--confidence", type=float, default=None)
     args = parser.parse_args()
 
     if args.mode == "replay":
         run_replay(Path(args.replay_file), api_url=args.api_url)
     else:
+        weights_path = Path(args.weights or vision_config.get("model_weights", "vision/weights/best.pt"))
+        if not weights_path.is_absolute():
+            weights_path = project_root / weights_path
         worker = VisionWorker(
-            weights_path=Path(args.weights),
+            weights_path=weights_path,
             api_url=args.api_url,
             approach=args.approach,
+            stride=args.stride if args.stride is not None else int(vision_config.get("stride", 3)),
+            conf_threshold=(
+                args.confidence
+                if args.confidence is not None
+                else float(vision_config.get("conf_threshold", 0.55))
+            ),
+            imgsz=args.imgsz if args.imgsz is not None else int(vision_config.get("imgsz", 640)),
+            debounce_window_w=int(vision_config.get("debounce_window_w", 8)),
+            debounce_confirm_k=int(vision_config.get("debounce_confirm_k", 5)),
+            bbox_area_ratio_min=float(vision_config.get("bbox_area_ratio_min", 0.005)),
+            release_after_s=float(vision_config.get("release_after_s", 3.0)),
+            class_mapping={int(k): str(v) for k, v in vision_config.get("classes", {}).items()},
         )
         if worker.authenticate():
             worker.load_model()
             worker.process_video(
                 video_source=args.video,
                 dump_replay_file=Path(args.dump_replay) if args.dump_replay else None,
+                max_frames=args.max_frames,
             )
 
 

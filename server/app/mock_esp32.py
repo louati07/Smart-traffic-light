@@ -33,7 +33,7 @@ class MockESP32Twin:
         self,
         firebase_client: FirebaseClientBase | None = None,
         intersection_id: str = "i1",
-        poll_interval_s: float = 0.2,
+        poll_interval_s: float | None = None,
         hmac_secret: str = "",
         hmac_enforce: bool = False,
     ) -> None:
@@ -43,7 +43,11 @@ class MockESP32Twin:
             db_secret=settings.firebase_db_secret,
         )
         self.intersection_id = intersection_id
-        self.poll_interval_s = poll_interval_s
+        self.poll_interval_s = (
+            poll_interval_s
+            if poll_interval_s is not None
+            else float(settings.timings.get("poll_ms", 1000)) / 1000.0
+        )
         self.hmac_secret = hmac_secret or settings.hmac_secret
         self.hmac_enforce = hmac_enforce or settings.hmac_enforce
 
@@ -52,6 +56,8 @@ class MockESP32Twin:
             green_ms=raw_timings.get("green_ms", 10000),
             yellow_ms=raw_timings.get("yellow_ms", 3000),
             all_red_ms=raw_timings.get("all_red_ms", 2000),
+            priority_yellow_ms=raw_timings.get("priority_yellow_ms", 2000),
+            priority_all_red_ms=raw_timings.get("priority_all_red_ms", 1000),
             min_green_ms=raw_timings.get("min_green_ms", 5000),
             priority_max_ms=raw_timings.get("priority_max_ms", 30000),
             heartbeat_timeout_ms=raw_timings.get("heartbeat_timeout_ms", 10000),
@@ -64,6 +70,8 @@ class MockESP32Twin:
 
         self.start_epoch_ms = int(time.time() * 1000)
         self.last_phase: Phase | None = None
+        self.last_mode: Any = None
+        self.last_seq: int = 0
         self.last_state_write_ms: int = 0
         self.last_command_poll_ms: int = 0
 
@@ -89,6 +97,7 @@ class MockESP32Twin:
                 if seq > self.fsm.last_seq:
                     cmd_str = cmd_data.get("cmd", "")
                     axis_str = cmd_data.get("axis")
+                    approach = cmd_data.get("approach")
                     ttl_s = cmd_data.get("ttl_s", 15)
                     sig = cmd_data.get("sig")
 
@@ -101,6 +110,7 @@ class MockESP32Twin:
                             cmd_str,
                             axis_str,
                             ttl_s,
+                            approach=approach,
                         )
                         if not valid_sig:
                             logger.warning("MockESP32 rejected command seq=%d: invalid signature", seq)
@@ -114,6 +124,7 @@ class MockESP32Twin:
                             axis=axis_str,
                             ttl_s=ttl_s,
                             sig=sig,
+                            approach=approach,
                         )
                         self.fsm.apply_command(fsm_cmd, now_ms=current_ms)
 
@@ -123,13 +134,18 @@ class MockESP32Twin:
         # 4. Check if state should be pushed to mailbox
         state = self.fsm.get_state()
         state_dict = state.to_dict()
+        state_dict["controller_id"] = "mock"
 
         phase_changed = (self.last_phase != self.fsm.phase)
+        mode_changed = (self.last_mode != self.fsm.mode)
+        seq_changed = (self.last_seq != self.fsm.last_seq)
         time_elapsed = (current_ms - self.last_state_write_ms >= 2000)
 
-        if phase_changed or time_elapsed:
+        if phase_changed or mode_changed or seq_changed or time_elapsed:
             self.firebase.set_state(state_dict, self.intersection_id)
             self.last_phase = self.fsm.phase
+            self.last_mode = self.fsm.mode
+            self.last_seq = self.fsm.last_seq
             self.last_state_write_ms = current_ms
 
         return state_dict

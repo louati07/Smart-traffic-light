@@ -22,13 +22,18 @@ router = APIRouter(tags=["WebSocket"])
 
 @router.websocket("/ws/state")
 async def websocket_intersection_state(websocket: WebSocket, token: str | None = None):
-    # Optional token verification from query param
-    if token:
-        try:
-            decode_access_token(token)
-        except Exception:
-            await websocket.close(code=4001, reason="Invalid token")
-            return
+    # Browser WebSockets cannot set Authorization headers, so use a short-lived
+    # query token and enforce the same operator/admin access as state endpoints.
+    if not token:
+        await websocket.close(code=4001, reason="Authentication required")
+        return
+    try:
+        claims = decode_access_token(token)
+        if claims.get("role") not in {"operator", "admin"}:
+            raise ValueError("Insufficient role")
+    except Exception:
+        await websocket.close(code=4001, reason="Invalid token or role")
+        return
 
     await websocket.accept()
 
@@ -39,27 +44,39 @@ async def websocket_intersection_state(websocket: WebSocket, token: str | None =
     )
     mongo = get_mongo_client(mode=settings.mongo_mode, uri=settings.mongo_uri, db_name=settings.mongo_db)
 
+    last_known_state = None
+
     try:
         while True:
-            state = firebase.get_state(settings.intersection_id)
-            heartbeat = firebase.get_heartbeat(settings.intersection_id)
-            recent_events = mongo.get_events(limit=5)
+            fetched_state = await asyncio.to_thread(firebase.get_state, settings.intersection_id)
+            if fetched_state:
+                last_known_state = fetched_state
+            state_age_s = await asyncio.to_thread(firebase.get_state_age_s, settings.intersection_id)
+
+            heartbeat = await asyncio.to_thread(firebase.get_heartbeat, settings.intersection_id)
+            recent_events = await asyncio.to_thread(mongo.get_events, 5)
 
             payload = {
                 "intersection_id": settings.intersection_id,
-                "state": state or {
+                "state": last_known_state or {
                     "phase": "NS_GREEN",
                     "mode": "NORMAL",
                     "lights": {"N": "G", "E": "R", "S": "G", "W": "R"},
                     "last_seq": 0,
                     "phase_elapsed_ms": 0,
                     "uptime_ms": 0,
+                    "priority_approach": None,
                 },
+                "state_age_s": state_age_s,
+                "state_fresh": state_age_s is not None and state_age_s <= 4.0,
                 "heartbeat": heartbeat,
                 "recent_events": recent_events,
             }
 
             await websocket.send_text(json.dumps(payload))
+            # Firebase is polled by REST, so a 150ms loop queues redundant
+            # reads while upstream latency is higher. Two updates per second
+            # are sufficient for the live traffic signal display.
             await asyncio.sleep(0.5)
 
     except WebSocketDisconnect:

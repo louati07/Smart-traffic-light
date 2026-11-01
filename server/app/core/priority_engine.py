@@ -1,12 +1,12 @@
 """Priority Engine: Arbitrates detections into safe sequenced commands.
 
 Contract (PLAN.md Section 4.4, Section 5.1, Section 8 P3):
-- Maps approach (N, S -> NS; E, W -> EW).
+- Maps each approach to its axis and includes both values in PRIORITY commands.
 - Consumes confirmed detections.
 - Issues PRIORITY command (increments seq strictly, writes to Firebase, logs to Mongo).
-- Automatically releases via CLEAR when no confirmed detection for release_after_s (default 3.0s).
+- Waits for the controller to report the requested approach green before releasing after detections stop for release_after_s (default 3.0s).
 - Enforces priority cooldown (default 2.0s).
-- Handles conflicts: first-come wins, second queued (max wait 15.0s).
+- Handles conflicts between approaches: first-come wins, others queue (max wait 15.0s).
 - Signs command if hmac_secret is provided.
 """
 
@@ -74,11 +74,24 @@ class PriorityEngine:
 
         self._lock = threading.Lock()
         self.seq: int = 0
+        try:
+            last_command = self.firebase.get_command(self.intersection_id) or {}
+            last_state = self.firebase.get_state(self.intersection_id) or {}
+            self.seq = max(
+                int(last_command.get("seq", 0) or 0),
+                int(last_state.get("last_seq", 0) or 0),
+            )
+        except Exception as exc:
+            logger.warning("Could not restore command sequence from mailbox: %s", exc)
         self.active_priority_axis: Axis | None = None
+        self.active_priority_approach: str | None = None
+        self.active_priority_seq: int | None = None
         self.active_approach: str | None = None
         self.active_vehicle_class: str | None = None
         self.active_event_id: str | None = None
         self.active_priority_started_s: float = 0.0
+        self.active_priority_granted_s: float | None = None
+        self.active_priority_ttl_s: int = command_ttl_s
         self.last_detection_time_s: float = 0.0
         self.cooldown_until_s: float = 0.0
 
@@ -102,14 +115,15 @@ class PriorityEngine:
             return None
 
         with self._lock:
-            # If priority already active for this axis, refresh detection timestamp
-            if self.active_priority_axis == axis:
+            # Only detections from the approach currently receiving green refresh
+            # that hold. An opposite approach on the same axis must be queued.
+            if self.active_priority_approach == det.approach:
                 self.last_detection_time_s = now
                 return None
 
-            # If priority active for the opposite axis, queue conflict
-            if self.active_priority_axis is not None and self.active_priority_axis != axis:
-                if not any(q.axis == axis for q in self.conflict_queue):
+            # The priority phase serves one approach at a time.
+            if self.active_priority_axis is not None:
+                if not any(q.approach == det.approach for q in self.conflict_queue):
                     self.conflict_queue.append(
                         QueuedConflict(
                             axis=axis,
@@ -150,6 +164,7 @@ class PriorityEngine:
             "seq": self.seq,
             "cmd": cmd_type,
             "axis": axis_str,
+            "approach": approach,
             "ttl_s": self.command_ttl_s,
             "issued_by": "priority-engine",
         }
@@ -161,18 +176,24 @@ class PriorityEngine:
                 cmd_type,
                 axis_str,
                 self.command_ttl_s,
+                approach=approach,
             )
 
-        # Update engine state
+        # Publish before committing engine state. A failed write leaves the
+        # engine eligible to retry on the next confirmed detection.
+        self.firebase.set_command(cmd_payload, self.intersection_id)
+
+        # Update engine state only after the mailbox accepted the command.
         self.active_priority_axis = axis
+        self.active_priority_approach = approach
         self.active_approach = approach
+        self.active_priority_seq = self.seq
         self.active_vehicle_class = vehicle_class
         self.active_priority_started_s = now_s
+        self.active_priority_granted_s = None
+        self.active_priority_ttl_s = self.command_ttl_s
         self.last_detection_time_s = now_s
         self.active_event_id = str(uuid.uuid4())
-
-        # Write to Firebase
-        self.firebase.set_command(cmd_payload, self.intersection_id)
 
         # Log to Mongo commands and events
         self.mongo.insert_command(cmd_payload)
@@ -197,13 +218,29 @@ class PriorityEngine:
         ttl_s: int = 15,
         issued_by: str = "operator",
         now_s: float | None = None,
+        approach: str | None = None,
     ) -> dict[str, Any]:
         """Manual override from dashboard."""
         now = now_s if now_s is not None else time.time()
         with self._lock:
-            self.seq += 1
             cmd_upper = cmd.upper()
             axis_upper = axis.upper() if axis else None
+
+            if cmd_upper == "CLEAR":
+                return self._clear_active_priority(now, outcome="manual_cleared", issued_by=issued_by)
+
+            approach_upper = approach.upper() if approach else None
+            if approach_upper is None and axis_upper:
+                approach_upper = "N" if axis_upper == "NS" else "E"
+            if approach_upper:
+                if approach_upper not in {"N", "E", "S", "W"}:
+                    raise ValueError("Approach must be N, E, S, or W")
+                approach_axis = "NS" if approach_upper in ("N", "S") else "EW"
+                if axis_upper and axis_upper != approach_axis:
+                    raise ValueError("Approach must belong to the selected axis")
+                axis_upper = approach_axis
+
+            self.seq += 1
 
             cmd_payload: dict[str, Any] = {
                 "seq": self.seq,
@@ -213,6 +250,8 @@ class PriorityEngine:
             }
             if axis_upper:
                 cmd_payload["axis"] = axis_upper
+            if approach_upper:
+                cmd_payload["approach"] = approach_upper
 
             if self.hmac_secret:
                 cmd_payload["sig"] = sign_command(
@@ -221,31 +260,35 @@ class PriorityEngine:
                     cmd_upper,
                     axis_upper,
                     ttl_s,
+                    approach=approach_upper,
                 )
 
+            self.firebase.set_command(cmd_payload, self.intersection_id)
             if cmd_upper == "PRIORITY" and axis_upper:
                 self.active_priority_axis = Axis(axis_upper)
-                self.active_approach = axis_upper[0]
+                self.active_priority_approach = approach_upper
+                self.active_approach = approach_upper
+                self.active_priority_seq = self.seq
                 self.active_vehicle_class = "manual"
                 self.active_priority_started_s = now
+                self.active_priority_granted_s = None
+                self.active_priority_ttl_s = ttl_s
                 self.last_detection_time_s = now
-            elif cmd_upper == "CLEAR":
-                self._clear_active_priority(now, outcome="manual_cleared")
-
-            self.firebase.set_command(cmd_payload, self.intersection_id)
             self.mongo.insert_command(cmd_payload)
             return cmd_payload
 
-    def _clear_active_priority(self, now_s: float, outcome: str = "completed") -> dict[str, Any] | None:
-        if self.active_priority_axis is None:
-            return None
-
+    def _clear_active_priority(
+        self,
+        now_s: float,
+        outcome: str = "completed",
+        issued_by: str = "priority-engine",
+    ) -> dict[str, Any]:
         self.seq += 1
         cmd_payload: dict[str, Any] = {
             "seq": self.seq,
             "cmd": "CLEAR",
             "ttl_s": self.command_ttl_s,
-            "issued_by": "priority-engine",
+            "issued_by": issued_by,
         }
         if self.hmac_secret:
             cmd_payload["sig"] = sign_command(
@@ -255,6 +298,10 @@ class PriorityEngine:
                 None,
                 self.command_ttl_s,
             )
+
+        # Keep the active hold intact if the CLEAR write fails; the ticker can
+        # retry it rather than losing track of a controller that is still held.
+        self.firebase.set_command(cmd_payload, self.intersection_id)
 
         if self.active_event_id:
             self.mongo.update_event(
@@ -266,12 +313,15 @@ class PriorityEngine:
             )
 
         self.active_priority_axis = None
+        self.active_priority_approach = None
+        self.active_priority_seq = None
         self.active_approach = None
         self.active_vehicle_class = None
         self.active_event_id = None
+        self.active_priority_granted_s = None
+        self.active_priority_ttl_s = self.command_ttl_s
         self.cooldown_until_s = now_s + self.cooldown_s
 
-        self.firebase.set_command(cmd_payload, self.intersection_id)
         self.mongo.insert_command(cmd_payload)
         logger.info("Issued CLEAR seq=%d (outcome=%s)", self.seq, outcome)
         return cmd_payload
@@ -284,11 +334,37 @@ class PriorityEngine:
         with self._lock:
             # 1. Release active priority if detection has ceased
             if self.active_priority_axis is not None:
-                elapsed_since_det = now - self.last_detection_time_s
-                if elapsed_since_det >= self.release_after_s:
-                    clear_cmd = self._clear_active_priority(now, outcome="auto_released")
-                    if clear_cmd:
-                        actions.append(clear_cmd)
+                if self.active_vehicle_class == "manual":
+                    state = self.firebase.get_state(self.intersection_id) or {}
+                    acknowledged = int(state.get("last_seq", 0) or 0) >= (self.active_priority_seq or 0)
+                    granted = acknowledged and state.get("priority_approach") == self.active_priority_approach
+                    if granted and self.active_priority_granted_s is None:
+                        self.active_priority_granted_s = now
+                    if self.active_priority_granted_s is not None and now - self.active_priority_granted_s >= self.active_priority_ttl_s:
+                        clear_cmd = self._clear_active_priority(now, outcome="auto_released")
+                        if clear_cmd:
+                            actions.append(clear_cmd)
+                    elif self.active_priority_granted_s is None and now - self.active_priority_started_s >= max(self.active_priority_ttl_s + 15, 30):
+                        logger.warning("Manual priority seq=%s was not granted before timeout", self.active_priority_seq)
+                        clear_cmd = self._clear_active_priority(now, outcome="auto_released")
+                        if clear_cmd:
+                            actions.append(clear_cmd)
+                else:
+                    elapsed_since_det = now - self.last_detection_time_s
+                    if elapsed_since_det >= self.release_after_s:
+                        state = self.firebase.get_state(self.intersection_id) or {}
+                        acknowledged = int(state.get("last_seq", 0) or 0) >= (self.active_priority_seq or 0)
+                        granted = (
+                            acknowledged
+                            and state.get("priority_approach") == self.active_priority_approach
+                        )
+                        command_timed_out = now - self.active_priority_started_s >= self.command_ttl_s + 2.0
+                        # Do not cancel a request while the controller is still
+                        # completing its mandatory yellow/all-red transition.
+                        if granted or command_timed_out:
+                            clear_cmd = self._clear_active_priority(now, outcome="auto_released")
+                            if clear_cmd:
+                                actions.append(clear_cmd)
 
             # 2. Prune expired conflicts
             valid_queue: list[QueuedConflict] = []

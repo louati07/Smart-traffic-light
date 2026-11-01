@@ -9,6 +9,7 @@ Paths:
 
 import logging
 import threading
+import time
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -31,6 +32,10 @@ class FirebaseClientBase(ABC):
     @abstractmethod
     def get_state(self, intersection_id: str = "i1") -> dict[str, Any] | None:
         pass
+
+    def get_state_age_s(self, intersection_id: str = "i1") -> float | None:
+        """Age of the last state value received from the controller, if known."""
+        return None
 
     @abstractmethod
     def set_state(self, state: dict[str, Any], intersection_id: str = "i1") -> None:
@@ -56,6 +61,7 @@ class InMemoryFirebase(FirebaseClientBase):
         self._lock = threading.Lock()
         self._commands: dict[str, dict[str, Any] | None] = {}
         self._states: dict[str, dict[str, Any] | None] = {}
+        self._state_updated_at: dict[str, float] = {}
         self._heartbeats: dict[str, int] = {}
 
     def get_command(self, intersection_id: str = "i1") -> dict[str, Any] | None:
@@ -75,6 +81,12 @@ class InMemoryFirebase(FirebaseClientBase):
     def set_state(self, state: dict[str, Any], intersection_id: str = "i1") -> None:
         with self._lock:
             self._states[intersection_id] = dict(state)
+            self._state_updated_at[intersection_id] = time.time()
+
+    def get_state_age_s(self, intersection_id: str = "i1") -> float | None:
+        with self._lock:
+            updated_at = self._state_updated_at.get(intersection_id)
+        return max(0.0, time.time() - updated_at) if updated_at is not None else None
 
     def get_heartbeat(self, intersection_id: str = "i1") -> int:
         with self._lock:
@@ -98,6 +110,12 @@ class RestFirebase(FirebaseClientBase):
         self.db_secret = db_secret
         self.timeout = timeout_s
         self._client = httpx.Client(timeout=timeout_s)
+        self._state_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
+        self._state_progress: dict[str, tuple[int | float, float]] = {}
+        self._heartbeat_cache: dict[str, tuple[float, int]] = {}
+        self._cache_lock = threading.Lock()
+        self._state_fetch_lock = threading.Lock()
+        self._next_state_retry_at = 0.0
 
     def _url(self, path: str) -> str:
         url = f"{self.db_url}/{path.lstrip('/')}.json"
@@ -116,26 +134,48 @@ class RestFirebase(FirebaseClientBase):
         return None
 
     def set_command(self, command: dict[str, Any], intersection_id: str = "i1") -> None:
-        try:
-            resp = self._client.put(
-                self._url(f"intersections/{intersection_id}/command"),
-                json=command,
-            )
-            resp.raise_for_status()
-        except Exception as e:
-            logger.error("RestFirebase set_command error: %s", e)
+        resp = self._client.put(
+            self._url(f"intersections/{intersection_id}/command"),
+            json=command,
+        )
+        resp.raise_for_status()
 
     def get_state(self, intersection_id: str = "i1") -> dict[str, Any] | None:
-        try:
-            resp = self._client.get(self._url(f"intersections/{intersection_id}/state"))
-            if resp.status_code == 200:
-                data = resp.json()
-                return data if isinstance(data, dict) else None
-        except Exception as e:
-            logger.error("RestFirebase get_state error: %s", e)
-        return None
+        with self._state_fetch_lock:
+            now = time.time()
+            with self._cache_lock:
+                cached = self._state_cache.get(intersection_id)
+            if cached and now - cached[0] < 0.2:
+                return cached[1]
+            if now < self._next_state_retry_at:
+                return cached[1] if cached else None
+
+            try:
+                resp = self._client.get(self._url(f"intersections/{intersection_id}/state"))
+                if resp.status_code == 200:
+                    data = resp.json()
+                    res = data if isinstance(data, dict) else None
+                    with self._cache_lock:
+                        self._state_cache[intersection_id] = (time.time(), res)
+                        uptime = res.get("uptime_ms") if res else None
+                        if isinstance(uptime, (int, float)):
+                            previous = self._state_progress.get(intersection_id)
+                            observed_at = time.time()
+                            if previous is None or uptime < previous[0] or uptime != previous[0]:
+                                self._state_progress[intersection_id] = (uptime, observed_at)
+                    self._next_state_retry_at = 0.0
+                    return res
+                logger.warning("RestFirebase get_state returned HTTP %s", resp.status_code)
+            except Exception as e:
+                logger.error("RestFirebase get_state error: %s", e)
+            self._next_state_retry_at = time.time() + 0.5
+            with self._cache_lock:
+                cached = self._state_cache.get(intersection_id)
+                return cached[1] if cached else None
 
     def set_state(self, state: dict[str, Any], intersection_id: str = "i1") -> None:
+        with self._cache_lock:
+            self._state_cache[intersection_id] = (time.time(), state)
         try:
             resp = self._client.put(
                 self._url(f"intersections/{intersection_id}/state"),
@@ -145,18 +185,43 @@ class RestFirebase(FirebaseClientBase):
         except Exception as e:
             logger.error("RestFirebase set_state error: %s", e)
 
+    def get_state_age_s(self, intersection_id: str = "i1") -> float | None:
+        with self._cache_lock:
+            cached = self._state_cache.get(intersection_id)
+            progress = self._state_progress.get(intersection_id)
+        if not cached or cached[1] is None:
+            return None
+        timestamp = progress[1] if progress else cached[0]
+        return max(0.0, time.time() - timestamp)
+
     def get_heartbeat(self, intersection_id: str = "i1") -> int:
+        now = time.time()
+        with self._cache_lock:
+            cached = self._heartbeat_cache.get(intersection_id)
+        if cached:
+            ts, val = cached
+            if now - ts < 1.0:
+                return val
+
         try:
             resp = self._client.get(self._url(f"intersections/{intersection_id}/heartbeat"))
             if resp.status_code == 200 and resp.json() is not None:
-                return int(resp.json())
+                val = int(resp.json())
+                with self._cache_lock:
+                    self._heartbeat_cache[intersection_id] = (now, val)
+                return val
         except Exception as e:
             logger.error("RestFirebase get_heartbeat error: %s", e)
-        return 0
+
+        with self._cache_lock:
+            cached = self._heartbeat_cache.get(intersection_id)
+            return cached[1] if cached else 0
 
     def increment_heartbeat(self, intersection_id: str = "i1") -> int:
         current = self.get_heartbeat(intersection_id)
         next_val = current + 1
+        with self._cache_lock:
+            self._heartbeat_cache[intersection_id] = (time.time(), next_val)
         try:
             resp = self._client.put(
                 self._url(f"intersections/{intersection_id}/heartbeat"),
@@ -178,6 +243,8 @@ class RestFirebase(FirebaseClientBase):
 
 # Singleton instances
 _in_memory_instance: InMemoryFirebase | None = None
+_rest_instances: dict[tuple[str, str | None], RestFirebase] = {}
+_client_factory_lock = threading.Lock()
 
 
 def get_firebase_client(
@@ -188,7 +255,11 @@ def get_firebase_client(
     """Factory to retrieve appropriate Firebase client based on mode."""
     global _in_memory_instance
     if mode.lower() == "rest" and db_url:
-        return RestFirebase(db_url, db_secret)
+        key = (db_url.rstrip("/"), db_secret)
+        with _client_factory_lock:
+            if key not in _rest_instances:
+                _rest_instances[key] = RestFirebase(db_url, db_secret, timeout_s=3.0)
+            return _rest_instances[key]
     if _in_memory_instance is None:
         _in_memory_instance = InMemoryFirebase()
     return _in_memory_instance

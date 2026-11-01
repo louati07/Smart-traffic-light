@@ -182,6 +182,7 @@ class TrafficSimulator:
                             seq=seq,
                             cmd=CommandType.PRIORITY.value,
                             axis=amb_axis,
+                            approach=ambulance_approach,
                             ttl_s=self.timings.command_ttl_s,
                         ),
                         now_ms=now_ms,

@@ -29,13 +29,25 @@ def get_health() -> dict[str, Any]:
 
     mongo_ok = mongo.health_check()
     firebase_ok = firebase.health_check()
-    uptime = time.time() - START_TIME
 
+    # Check ESP32 connectivity via heartbeat / state in Firebase
+    esp32_ok = False
+    try:
+        hb = firebase.get_heartbeat(settings.intersection_id)
+        st = firebase.get_state(settings.intersection_id)
+        esp32_ok = bool(hb > 0 or st is not None)
+    except Exception:
+        esp32_ok = False
+
+    uptime = time.time() - START_TIME
     overall_status = "ok" if (mongo_ok and firebase_ok) else "degraded"
 
     return {
         "status": overall_status,
         "mongo": mongo_ok,
         "firebase": firebase_ok,
+        "mongo_ok": mongo_ok,
+        "firebase_ok": firebase_ok,
+        "esp32_ok": esp32_ok,
         "uptime_s": round(uptime, 2),
     }

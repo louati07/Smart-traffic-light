@@ -28,10 +28,8 @@ lint:
 	cd web && npm run lint
 
 demo:
-	python scripts/seed_demo_data.py
 	@echo "Starting full system in mock demo mode..."
-	python server/app/mock_esp32.py &
-	uvicorn server.app.main:app --host 0.0.0.0 --port 8000
+	python scripts/run_demo.py
 
 clean:
 	rm -rf .pytest_cache .ruff_cache htmlcov .coverage

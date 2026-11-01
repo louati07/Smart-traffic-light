@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Activity, Shield, BarChart3, Radio, Server, Siren, UserCheck } from "lucide-react";
+import { Activity, Shield, BarChart3, Radio, Server, Siren, UserCheck, Brain } from "lucide-react";
 
 interface NavbarProps {
   activeTab: string;
@@ -22,6 +22,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   const tabs = [
     { id: "twin", label: "2D Digital Twin", icon: Radio },
+    { id: "architecture", label: "Architecture", icon: Brain },
     { id: "compare", label: "A/B Battle Compare", icon: BarChart3 },
     { id: "events", label: "Priority Events", icon: Siren },
     { id: "security", label: "Security Audit", icon: Shield },

@@ -24,7 +24,7 @@
 
 ## 1. Project summary
 
-A connected intersection whose traffic lights normally follow a fixed timer. A camera watches each approach. When an **emergency vehicle** (ambulance, fire/civil-protection truck, police car) is confidently detected, the system **safely** switches the lights to give that vehicle's axis a green, holds it until the vehicle has passed, then returns to the normal cycle.
+A connected intersection whose traffic lights normally follow a fixed timer. A camera watches each approach. When an **emergency vehicle** (ambulance, fire/civil-protection truck, police car) is confidently detected, the system safely gives that specific approach green, holds it while the vehicle passes, then returns to the normal cycle. During that priority hold, the other three approaches remain red.
 
 It is built in the required 4 layers plus DevOps:
 
@@ -79,8 +79,10 @@ If any budget is missed, **reduce resolution/stride before reducing features**.
 | Name | Default (demo scale) | Meaning |
 |---|---|---|
 | `GREEN_MS` | 10000 | Normal green duration per axis |
-| `YELLOW_MS` | 3000 | Yellow duration (minimum, never shortened) |
-| `ALL_RED_MS` | 2000 | All-red clearance between axes (minimum, never shortened) |
+| `YELLOW_MS` | 3000 | Normal-cycle yellow duration |
+| `ALL_RED_MS` | 2000 | Normal-cycle all-red clearance between axes |
+| `PRIORITY_YELLOW_MS` | 2000 | Wokwi demo emergency yellow clearance |
+| `PRIORITY_ALL_RED_MS` | 1000 | Wokwi demo emergency all-red clearance |
 | `MIN_GREEN_MS` | 5000 | A green must last at least this long before it may be cut for priority |
 | `PRIORITY_MAX_MS` | 30000 | Max time priority may hold a green (watchdog) |
 | `HEARTBEAT_TIMEOUT_MS` | 10000 | No server heartbeat for this long → FALLBACK mode |
@@ -91,7 +93,7 @@ If any budget is missed, **reduce resolution/stride before reducing features**.
 
 - **S1.** The two axes are never green at the same time.
 - **S2.** An axis never goes directly `G → G` or `R → G` for the opposite axis without `Y` then `ALL_RED` in between.
-- **S3.** `YELLOW_MS` and `ALL_RED_MS` are never shortened by any command.
+- **S3.** Normal changes use `YELLOW_MS` + `ALL_RED_MS`; the Wokwi demo uses its separate `PRIORITY_YELLOW_MS` + `PRIORITY_ALL_RED_MS` after minimum green.
 - **S4.** A green is never cut before `MIN_GREEN_MS`.
 - **S5.** Priority never holds a green longer than `PRIORITY_MAX_MS`.
 - **S6.** If the heartbeat is lost, or a command is invalid, unsigned (when signing is on), expired, or has an old `seq`, the controller ignores it and continues the normal timer cycle.
@@ -103,9 +105,9 @@ States: `NS_GREEN`, `NS_YELLOW`, `ALL_RED_TO_EW`, `EW_GREEN`, `EW_YELLOW`, `ALL_
 
 Normal cycle: `NS_GREEN → NS_YELLOW → ALL_RED_TO_EW → EW_GREEN → EW_YELLOW → ALL_RED_TO_NS → NS_GREEN ...`
 
-Priority behavior for command `PRIORITY(axis=X)`:
-1. If X is already green: **hold** green (pause the timer) until `CLEAR`, TTL expiry, or `PRIORITY_MAX_MS`.
-2. If the other axis is green: wait until `MIN_GREEN_MS` has elapsed, then run `YELLOW → ALL_RED`, then give X green and hold.
+Priority behavior for command `PRIORITY(axis=X, approach=A)`:
+1. If A's axis is already green: give A green and turn the other three approaches red immediately; hold until `CLEAR`, TTL expiry, or `PRIORITY_MAX_MS`.
+2. If the other axis is green: wait until `MIN_GREEN_MS` has elapsed, then run the demo emergency `YELLOW → ALL_RED` clearance (2s + 1s), then give only A green and hold.
 3. If already in a yellow or all-red phase: finish the sequence; the next green goes to X and is held.
 4. On `CLEAR`, TTL expiry, or max-hold: keep X green until its `MIN_GREEN_MS` is satisfied, then resume the normal cycle through `Y → ALL_RED → other axis`.
 5. Heartbeat lost → `mode=FALLBACK`: drop any priority, resume normal cycle via safe transition; buzzer short-beep pattern. When heartbeat returns → `mode=NORMAL`.
@@ -130,12 +132,13 @@ Modes reported in state: `NORMAL`, `PRIORITY`, `FALLBACK`.
   "seq": 17,
   "cmd": "PRIORITY",
   "axis": "NS",
+  "approach": "N",
   "ttl_s": 15,
   "issued_by": "priority-engine",
   "sig": "optional hex HMAC-SHA256 (see 5.4)"
 }
 ```
-`cmd` is `PRIORITY` or `CLEAR`. `axis` is `NS` or `EW` (required for `PRIORITY`). `seq` strictly increases.
+`cmd` is `PRIORITY` or `CLEAR`. `axis` is `NS` or `EW`; `approach` identifies one direction (`N`, `E`, `S`, or `W`) and must match its axis. New priority commands include both. Axis-only commands remain accepted for compatibility. `seq` strictly increases.
 
 `state`:
 ```json
@@ -143,6 +146,7 @@ Modes reported in state: `NORMAL`, `PRIORITY`, `FALLBACK`.
   "phase": "NS_GREEN",
   "mode": "NORMAL",
   "lights": {"N": "G", "E": "R", "S": "G", "W": "R"},
+  "priority_approach": null,
   "last_seq": 17,
   "phase_elapsed_ms": 4200,
   "uptime_ms": 123456
@@ -192,14 +196,14 @@ Error format: `{ "error": {"code": "...", "message": "..."} }`. Unauthorized/for
 
 - `detections` {camera_id, approach, class, confidence, bbox_area_ratio, frame_id, confirmed, received_at}
 - `events` {event_id, approach, axis, class, started_at, released_at, light_change_latency_ms, outcome}
-- `commands` {seq, cmd, axis, ttl_s, issued_at, acked_at?}
+- `commands` {seq, cmd, axis, approach?, ttl_s, issued_at, acked_at?}
 - `sim_runs` {run_id, seed, scenario, created_at, baseline_kpis, priority_kpis, traces_ref}
 - `security_events` {ts, source_ip, reason, endpoint, details}
 - Indexes: `detections.received_at`, `events.started_at`, `security_events.ts`.
 
 ### 5.4 Security (priority order)
 - **P1:** JWT (HS256) on all endpoints except `/health` and `/auth/token`. Roles enforced. Passwords hashed (bcrypt/argon2). Rate-limit `/detections` (simple in-memory token bucket).
-- **P2 (do after core demo works):** HMAC-SHA256 signature on commands. Signed string: `seq|cmd|axis|ttl_s`. Shared secret in `.env` (server) and a constant in firmware (Wokwi only). ESP32 ignores commands with bad signature (invariant S6) and increments a local counter visible in `state.rejected_cmds`.
+- **P2 (do after core demo works):** HMAC-SHA256 signature on commands. When `approach` is present, the Python signer includes it: `seq|cmd|axis|approach|ttl_s`; legacy axis-only commands use `seq|cmd|axis|ttl_s`. The Python mock can enforce signatures. Firmware HMAC verification is not currently implemented.
 
 ---
 
@@ -345,7 +349,7 @@ Day numbers are targets. Agents work phases in order, but WP owners (Section 11)
 ### P3 — API, databases, Firebase bridge (Day 3–5)
 - FastAPI app implementing Section 5.2 and 5.3. JWT auth (5.4 P1). Rate limit on `/detections`.
 - `clients/firebase.py`: `RestFirebase` (httpx) and `InMemoryFirebase` (tests/mock). Same interface.
-- `core/priority_engine.py`: consumes confirmed detections → issues `PRIORITY` command for the matching axis (increments `seq`, writes to Firebase, stores in Mongo) → issues `CLEAR` when no confirmed detection for that approach for `release_after_s=3` (default). Cooldown of 2 s after `CLEAR`. Priority conflicts: if both axes request priority at once, first-come wins; the second is queued (max wait 15 s then dropped and logged).
+- `core/priority_engine.py`: consumes confirmed detections → issues `PRIORITY` with both axis and approach (increments `seq`, writes to Firebase, stores in Mongo) → after the controller reports that approach green, issues `CLEAR` when detections have ceased for `release_after_s=3` (default). It does not cancel a request while the controller is still completing clearance. Cooldown of 2 s after `CLEAR`. Competing approaches are queued (max wait 15 s then dropped and logged).
 - Heartbeat task: increments `/heartbeat` every 2 s.
 - Server polls Firebase `state` every 1 s, stores transitions, pushes to WebSocket clients.
 - `mock_esp32.py`: Python process using `light_fsm` that behaves like the firmware against the same Firebase interface (for CI and offline demo).

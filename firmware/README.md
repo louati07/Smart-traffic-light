@@ -17,8 +17,12 @@ This directory contains the complete C++ firmware and circuit definition for sim
 ## How to Run in Wokwi
 
 1. Open [wokwi.com](https://wokwi.com) and start a new **ESP32** project.
-2. In the code tab, paste the contents of [`sketch.ino`](file:///c:/poly/SecondYearEng/S1/IOT/project/firmware/sketch.ino).
-3. In the diagram tab, paste the contents of [`diagram.json`](file:///c:/poly/SecondYearEng/S1/IOT/project/firmware/diagram.json).
-4. In the Library Manager tab, add `ArduinoJson` (or paste [`libraries.txt`](file:///c:/poly/SecondYearEng/S1/IOT/project/firmware/libraries.txt)).
+2. In the code tab, paste the contents of [`sketch.ino`](sketch.ino).
+3. In the diagram tab, paste the contents of [`diagram.json`](diagram.json).
+4. In the Library Manager tab, add `ArduinoJson` (or paste [`libraries.txt`](libraries.txt)).
 5. Click **Play** to start simulation.
-6. The simulated ESP32 connects to Wokwi virtual Wi-Fi (`Wokwi-GUEST`) and syncs live state with Firebase.
+6. Set `FIREBASE_HOST` and, for a protected database, `FIREBASE_AUTH` in the sketch. Keep real credentials out of Git. The ESP32 then connects to Wokwi virtual Wi-Fi (`Wokwi-GUEST`) and syncs state with Firebase.
+
+The firmware timing constants mirror `config.yaml`: green 10 s, yellow 3 s, all-red 2 s, minimum green 5 s, and command polling 700 ms. Update both copies together. The firmware currently does not verify HMAC signatures.
+
+Priority commands carry both `axis` and `approach`. During the priority hold, only the requested approach is green; the other three are red. If priority arrives while the other axis is green, the controller finishes its minimum-green, yellow, and all-red clearance first.

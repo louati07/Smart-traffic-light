@@ -38,12 +38,12 @@ export const SecurityView: React.FC<SecurityViewProps> = ({ apiBase }) => {
           <div>
             <h2 style={{ fontSize: "1.3rem", fontWeight: 700 }}>Security Audit & Intrusion Monitor</h2>
             <p style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>
-              Real-time audit log of rejected, forged, or rate-limited requests
+              Audit log of rejected and rate-limited requests. HMAC command verification is supported by the software mock when enabled; the ESP32 firmware does not currently verify HMAC signatures.
             </p>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "8px", background: "rgba(16, 185, 129, 0.15)", color: "#10b981", padding: "6px 12px", borderRadius: "8px", fontSize: "0.8rem", fontWeight: 600 }}>
             <ShieldCheck size={16} />
-            <span>Active Defense: HS256 + HMAC-SHA256</span>
+            <span>JWT access checks + detection rate limit</span>
           </div>
         </div>
 

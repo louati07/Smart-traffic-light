@@ -47,6 +47,8 @@ data/videos/*.mp4
 data/videos/*.avi
 data/videos/*.mov
 !data/videos/README.md
+data/.ultralytics-config/
+runs/
 
 # OS and IDE
 .DS_Store

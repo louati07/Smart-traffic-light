@@ -18,11 +18,14 @@ export const CompareBattle: React.FC<CompareBattleProps> = ({ apiBase }) => {
 
   // Load available simulation runs
   useEffect(() => {
-    fetch(`${apiBase}/events`)
+    const token = localStorage.getItem("token") || "";
+    const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+
+    fetch(`${apiBase}/events`, { headers: authHeaders })
       .catch(() => {});
 
     // Try to trigger or load runs from API
-    fetch(`${apiBase}/kpi/summary`)
+    fetch(`${apiBase}/kpi/summary`, { headers: authHeaders })
       .then((r) => r.json())
       .then(() => {
         // Run a default comparison if none exist
@@ -217,7 +220,7 @@ export const CompareBattle: React.FC<CompareBattleProps> = ({ apiBase }) => {
             </div>
 
             <div style={{ fontSize: "0.85rem", color: baseFrame?.ambulance?.status === "cleared" ? "#10b981" : "#f59e0b" }}>
-              Ambulance: {baseFrame?.ambulance ? `${baseFrame.ambulance.status} (${baseFrame.ambulance.distance_m.toFixed(0)}m)` : "In approach queue"}
+              Ambulance: {baseFrame?.ambulance ? `${baseFrame.ambulance.status} (${(baseFrame.ambulance.distance_m ?? 0).toFixed(0)}m)` : "In approach queue"}
             </div>
           </div>
         </div>
@@ -260,7 +263,7 @@ export const CompareBattle: React.FC<CompareBattleProps> = ({ apiBase }) => {
             </div>
 
             <div style={{ fontSize: "0.85rem", color: prioFrame?.ambulance?.status === "cleared" ? "#10b981" : "#38bdf8", fontWeight: 600 }}>
-              Ambulance: {prioFrame?.ambulance ? `${prioFrame.ambulance.status} (${prioFrame.ambulance.distance_m.toFixed(0)}m)` : "Granted green clearance"}
+              Ambulance: {prioFrame?.ambulance ? `${prioFrame.ambulance.status} (${(prioFrame.ambulance.distance_m ?? 0).toFixed(0)}m)` : "Granted green clearance"}
             </div>
           </div>
         </div>

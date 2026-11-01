@@ -2,7 +2,7 @@
 
 ## 1. System Overview
 
-The **Smart Intersection Digital Twin** orchestrates emergency-vehicle priority on a connected 4-approach intersection (`i1`) while providing strict mathematical safety guarantees and deterministic A/B comparison against fixed-timer baselines.
+The **Smart Intersection Digital Twin** demonstrates emergency-vehicle priority on one 4-approach intersection (`i1`). A priority command identifies one approach; while it is held, that approach alone receives green and the other three remain red. Its Python mock is the offline reference implementation; the Wokwi firmware mirrors its controller timings and communicates through Firebase in connected mode. The A/B simulator is a separate deterministic experiment, not a live measurement of the physical controller.
 
 ```
        +-------------------------------------------------------+
@@ -43,12 +43,13 @@ The **Smart Intersection Digital Twin** orchestrates emergency-vehicle priority 
    - Local deterministic Finite State Machine (FSM).
    - Driven purely by non-blocking `millis()`.
    - 12 Traffic Light LEDs (N, E, S, W approaches x R, Y, G) + Status LED + Buzzer.
-   - Enforces Safety Invariants S1–S7 locally regardless of network commands.
-   - Reverts to `FALLBACK` mode if server heartbeat fails for >10 s.
+   - Runs the local signal FSM. Emergency commands identify one approach, and the controller gates the other three signals red during the priority green.
+   - In deployment, roadside camera/video feeds connect to the host-side vision worker. The ESP32 receives only the resulting approach-specific command through Firebase; it does not run YOLO or capture video.
+   - Reverts to `FALLBACK` mode if server heartbeat fails for >10 s. Firmware does not currently verify HMAC signatures.
 
 2. **Server Layer (FastAPI)**
-   - REST API `/api/v1` and WebSocket `/ws/state`.
-   - Priority engine arbitrating axis priority, command sequencing, and cooldown.
+   - REST API `/api/v1` and authenticated WebSocket `/api/v1/ws/state`.
+   - Priority engine carries the requested approach with each command and queues competing approaches.
    - Heartbeat generator (+1 counter every 2 seconds).
    - In-memory fallback support (`FIREBASE_MODE=memory`, `MONGO_MODE=memory`).
    - Deterministic discrete-event simulation engine with seeded Poisson arrivals.
@@ -59,8 +60,9 @@ The **Smart Intersection Digital Twin** orchestrates emergency-vehicle priority 
 
 4. **Vision Layer**
    - Lightweight YOLO (YOLOv8n / YOLO11n) running on CPU (stride 3, imgsz 640/480).
-   - Sliding-window debounce filter (W=8, K=5, confidence >= 0.55, area ratio >= 0.005).
+   - Sliding-window debounce filter, configured by `config.yaml` (defaults: W=8, K=5, confidence >= 0.55, area ratio >= 0.005).
    - Zero-dependency deterministic replay mode for offline demonstrations.
+   - The detector and debounce result are inspectable in the API/events/dashboard; only confirmed emergency detections are allowed to request signal priority.
 
 5. **Interface Layer (React 18 + Vite + TS)**
    - 2D SVG Digital Twin showing live animated vehicle movements and intersection lights.
@@ -71,13 +73,13 @@ The **Smart Intersection Digital Twin** orchestrates emergency-vehicle priority 
 
 - **S1**: The two axes (`NS` and `EW`) are never green at the same time.
 - **S2**: An axis never transitions `G -> G` or `R -> G` without intermediate `Y` and `ALL_RED` clearance phases.
-- **S3**: `YELLOW_MS` (3000 ms) and `ALL_RED_MS` (2000 ms) are never shortened by any command.
+- **S3**: Normal clearance is `YELLOW_MS` (3000 ms) + `ALL_RED_MS` (2000 ms). The Wokwi demo uses 2000 ms yellow + 1000 ms all-red for emergency preemption, after the 5000 ms minimum green.
 - **S4**: A green light is never terminated before `MIN_GREEN_MS` (5000 ms).
 - **S5**: Priority hold never exceeds `PRIORITY_MAX_MS` (30000 ms).
-- **S6**: Controller ignores invalid, expired, unsigned, or outdated `seq` commands, falling back to normal cycle.
+- **S6**: Controller rejects malformed or outdated sequence commands and enters fallback on heartbeat loss. HMAC enforcement is available in the Python mock when enabled; firmware verification is not implemented.
 - **S7**: Priority release always transitions cleanly via `Y -> ALL_RED -> opposite axis`.
 
-## 4. Performance Targets
+## 4. Performance Targets (not yet benchmark results)
 
 - Inference: >= 8 FPS on standard CPU.
 - Detections API latency: p95 < 200 ms.

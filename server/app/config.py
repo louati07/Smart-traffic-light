@@ -32,7 +32,7 @@ class Settings(BaseSettings):
 
     # Firebase Realtime DB
     firebase_db_url: str = Field(
-        default="https://smart-intersection-demo-default-rtdb.firebaseio.com",
+        default="https://emergency-traffic-controller-default-rtdb.europe-west1.firebasedatabase.app",
         alias="FIREBASE_DB_URL",
     )
     firebase_db_secret: str | None = Field(default=None, alias="FIREBASE_DB_SECRET")
@@ -86,10 +86,12 @@ class Settings(BaseSettings):
             "green_ms": 10000,
             "yellow_ms": 3000,
             "all_red_ms": 2000,
+            "priority_yellow_ms": 2000,
+            "priority_all_red_ms": 1000,
             "min_green_ms": 5000,
             "priority_max_ms": 30000,
             "heartbeat_timeout_ms": 10000,
-            "poll_ms": 700,
+            "poll_ms": 1000,
             "command_ttl_s": 15,
         })
 

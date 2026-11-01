@@ -27,6 +27,7 @@ def set_priority_engine(engine: PriorityEngine) -> None:
 class ManualCommandInput(BaseModel):
     cmd: Literal["PRIORITY", "CLEAR"] = Field(..., example="PRIORITY")
     axis: Literal["NS", "EW"] | None = Field(None, example="NS")
+    approach: Literal["N", "E", "S", "W"] | None = Field(None, example="N")
     ttl_s: int = Field(default=15, ge=1, le=60, example=15)
 
 
@@ -41,6 +42,7 @@ def get_intersection_state(
         db_secret=settings.firebase_db_secret,
     )
     state = firebase.get_state(intersection_id)
+    state_age_s = firebase.get_state_age_s(intersection_id)
     if not state:
         # Return sensible default initial state if none written yet
         return {
@@ -50,8 +52,11 @@ def get_intersection_state(
             "last_seq": 0,
             "phase_elapsed_ms": 0,
             "uptime_ms": 0,
+            "priority_approach": None,
+            "state_age_s": state_age_s,
+            "state_fresh": False,
         }
-    return state
+    return {**state, "state_age_s": state_age_s, "state_fresh": state_age_s is not None and state_age_s <= 4.0}
 
 
 @router.post("/{intersection_id}/command")
@@ -60,11 +65,24 @@ def issue_manual_command(
     cmd_body: ManualCommandInput,
     user: dict[str, Any] = Depends(require_role(["operator", "admin"])),
 ) -> dict[str, Any]:
-    if cmd_body.cmd == "PRIORITY" and not cmd_body.axis:
+    if cmd_body.cmd == "PRIORITY" and not cmd_body.axis and not cmd_body.approach:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"error": {"code": "VALIDATION_ERROR", "message": "Field 'axis' is required for PRIORITY command"}},
+            detail={"error": {"code": "VALIDATION_ERROR", "message": "Field 'approach' or 'axis' is required for PRIORITY command"}},
         )
+
+    approach = cmd_body.approach
+    axis = cmd_body.axis
+    if approach:
+        approach_axis = "NS" if approach in ("N", "S") else "EW"
+        if axis and axis != approach_axis:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"error": {"code": "VALIDATION_ERROR", "message": "Approach does not belong to the selected axis"}},
+            )
+        axis = approach_axis
+    elif axis:
+        approach = "N" if axis == "NS" else "E"
 
     if not priority_engine_instance:
         raise HTTPException(
@@ -75,9 +93,10 @@ def issue_manual_command(
     operator_user = user.get("username", "operator")
     issued = priority_engine_instance.issue_manual_command(
         cmd=cmd_body.cmd,
-        axis=cmd_body.axis,
+        axis=axis,
         ttl_s=cmd_body.ttl_s,
         issued_by=f"operator:{operator_user}",
+        approach=approach,
     )
 
     return {

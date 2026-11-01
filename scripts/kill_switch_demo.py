@@ -16,10 +16,7 @@ from server.app.core.light_fsm import FSMCommand, FSMTimings, LightFSM, Mode, Ph
 
 def run_kill_switch_demo():
     timings = FSMTimings(
-        green_ms=6000,
-        yellow_ms=2000,
-        all_red_ms=1000,
-        heartbeat_timeout_ms=5000,  # 5s demo scale for fast verification
+        heartbeat_timeout_ms=10000,
     )
     fsm = LightFSM(timings, initial_now_ms=0)
 
@@ -34,10 +31,10 @@ def run_kill_switch_demo():
     print(f"   t=1500ms: Phase={fsm.phase.value}, Mode={fsm.mode.value}, Held={fsm.hold_green_active}")
 
     print("\n3. CUTTING HEARTBEAT (Simulating network collapse / server failure)...")
-    print("   Advancing time past heartbeat timeout threshold (5000ms)...")
+    print("   Advancing time past heartbeat timeout threshold (10000ms)...")
 
     # Advance time without calling record_heartbeat
-    for t in range(2000, 7001, 1000):
+    for t in range(2000, 12001, 1000):
         fsm.tick(t)
         print(f"   t={t}ms: Phase={fsm.phase.value}, Mode={fsm.mode.value}, Lights={fsm.lights}")
 
@@ -48,7 +45,7 @@ def run_kill_switch_demo():
 
     print("\n5. Testing that normal fail-safe cycle continues predictably:")
     phases = []
-    for t in range(8000, 20000, 1000):
+    for t in range(13000, 25001, 1000):
         fsm.tick(t)
         if not phases or phases[-1] != fsm.phase.value:
             phases.append(fsm.phase.value)

@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY vision/requirements.txt /app/vision/requirements.txt
 RUN pip install --no-cache-dir -r /app/vision/requirements.txt
 
+COPY config.yaml /app/config.yaml
 COPY vision /app/vision
 COPY data/replay /app/data/replay
 

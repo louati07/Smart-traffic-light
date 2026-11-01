@@ -3,13 +3,17 @@ intersection:
   name: "Smart Intersection Digital Twin"
 
 timings:
+  # Canonical controller profile. Mirror these values in firmware/sketch.ino.
   green_ms: 10000
   yellow_ms: 3000
   all_red_ms: 2000
+  # Simulation-only emergency clearance; normal cycle keeps the full values above.
+  priority_yellow_ms: 2000
+  priority_all_red_ms: 1000
   min_green_ms: 5000
   priority_max_ms: 30000
   heartbeat_timeout_ms: 10000
-  poll_ms: 700
+  poll_ms: 1000
   command_ttl_s: 15
 
 vision:

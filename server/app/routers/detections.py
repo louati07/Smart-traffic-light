@@ -28,7 +28,9 @@ def set_priority_engine(engine: PriorityEngine) -> None:
 class DetectionInput(BaseModel):
     camera_id: str = Field(..., example="cam-N")
     approach: Literal["N", "E", "S", "W"] = Field(..., example="N")
-    class_name: Literal["ambulance", "fire_truck", "police_car"] = Field(..., alias="class", example="ambulance")
+    # `none` is the vision worker's explicit negative-frame sentinel; it must
+    # be accepted and stored but can never trigger emergency priority.
+    class_name: Literal["ambulance", "fire_truck", "police_car", "vehicle", "none"] = Field(..., alias="class", example="ambulance")
     confidence: float = Field(..., ge=0.0, le=1.0, example=0.87)
     bbox_area_ratio: float = Field(..., ge=0.0, le=1.0, example=0.021)
     frame_id: int = Field(..., example=1234)
@@ -66,9 +68,9 @@ def submit_detection(
     det_dict = det.model_dump(by_alias=True)
     mongo.insert_detection(det_dict)
 
-    # 3. If confirmed=True, pass to PriorityEngine
+    # 3. If confirmed=True and emergency class, pass to PriorityEngine
     action_taken = None
-    if det.confirmed and priority_engine_instance:
+    if det.confirmed and det.class_name in ("ambulance", "fire_truck", "police_car") and priority_engine_instance:
         conf_det = ConfirmedDetection(
             camera_id=det.camera_id,
             approach=det.approach,

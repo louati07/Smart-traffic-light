@@ -1,16 +1,15 @@
-# YOLO Weights Directory
+# YOLO Model Weights
 
-Place your trained YOLO model weight file (`best.pt`) here.
+The development workspace currently contains `best.pt`, a fine-tuned YOLO11n checkpoint for `ambulance`, `fire_truck`, `police_car`, and `vehicle` detection. The 26.6 MB checkpoint is Git-ignored, so it is **not included in a fresh clone or public upload**.
 
-## How to get `best.pt`
+To reproduce the current inference test, obtain the checkpoint from the project owner and place it at:
 
-1. Open `vision/train/train_colab.ipynb` in Google Colab (free T4 GPU).
-2. Follow the notebook steps to merge datasets and train `yolo11n` (or `yolov8n`).
-3. Download the resulting `runs/detect/train/weights/best.pt`.
-4. Copy it to this directory: `vision/weights/best.pt`.
+```text
+vision/weights/best.pt
+```
 
-## Notes
+Then install `vision/requirements.txt`, run `python vision/evaluate_model.py`, and review the report described in [`docs/AI_MODEL_EVALUATION.md`](../../docs/AI_MODEL_EVALUATION.md). That report distinguishes metrics stored in the checkpoint from the sampled-video inference run and does not claim an independent test-set score.
 
-- This directory is **git-ignored** — do not commit model weights.
-- If `best.pt` is missing, the vision worker will exit with a clear error message.
-- For demo purposes, use `--mode replay` to bypass live inference entirely.
+The training workflow is in [`vision/train/train_colab.ipynb`](../train/train_colab.ipynb). It starts from pretrained YOLO11n and fine-tunes it using the prepared dataset. Raw training data and labels are not committed. Do not claim the model can be independently retrained from this repository unless the dataset provenance, access, and licensing are also supplied.
+
+Model weights are excluded from Git by design. For distribution, publish them as a separately versioned release/artifact with the training-data and model-license information, rather than committing a large binary into the source repository.

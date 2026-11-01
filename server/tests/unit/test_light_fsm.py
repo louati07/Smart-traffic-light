@@ -67,14 +67,14 @@ def test_priority_when_already_green_holds_green():
     assert fsm.phase == Phase.NS_YELLOW
 
 
-def test_priority_from_opposite_axis_respects_min_green():
-    """Invariant S4: Green is never cut before MIN_GREEN_MS."""
+def test_priority_from_opposite_axis_uses_fast_safe_demo_clearance():
+    """Keep minimum green, then use 2s yellow + 1s all-red for preemption."""
     timings = FSMTimings(min_green_ms=5000)
     fsm = LightFSM(timings, initial_now_ms=0)
     assert fsm.phase == Phase.NS_GREEN
 
     # Priority requested for EW at t=2000 ms (only 2s into NS green)
-    cmd = FSMCommand(seq=1, cmd="PRIORITY", axis="EW", ttl_s=15)
+    cmd = FSMCommand(seq=1, cmd="PRIORITY", axis="EW", approach="E", ttl_s=15)
     fsm.apply_command(cmd, now_ms=2000)
 
     # At t=4999 ms, NS green must still be maintained
@@ -85,17 +85,18 @@ def test_priority_from_opposite_axis_respects_min_green():
     fsm.tick(5000)
     assert fsm.phase == Phase.NS_YELLOW
 
-    # S3: Yellow (3s) and all-red (2s) must complete
-    fsm.tick(7999)
+    # Emergency clearance: 2s yellow followed by 1s all-red.
+    fsm.tick(6999)
     assert fsm.phase == Phase.NS_YELLOW
+    fsm.tick(7000)
+    assert fsm.phase == Phase.ALL_RED_TO_EW
+    fsm.tick(7999)
+    assert fsm.phase == Phase.ALL_RED_TO_EW
     fsm.tick(8000)
-    assert fsm.phase == Phase.ALL_RED_TO_EW
-    fsm.tick(9999)
-    assert fsm.phase == Phase.ALL_RED_TO_EW
-    fsm.tick(10000)
-    # Now EW green is active and held
+    # Only the requested approach gets green.
     assert fsm.phase == Phase.EW_GREEN
     assert fsm.mode == Mode.PRIORITY
+    assert fsm.lights == {"N": "R", "E": "G", "S": "R", "W": "R"}
 
 
 def test_priority_watchdog_max_hold():
@@ -194,18 +195,16 @@ def test_hypothesis_invariants_s1_through_s7(commands):
                 duration_in_prev_phase = t - phase_start_time
                 if last_phase == Phase.NS_YELLOW:
                     assert phase == Phase.ALL_RED_TO_EW
-                    # Invariant S3: Yellow duration never shortened
-                    assert duration_in_prev_phase >= fsm.timings.yellow_ms
+                    assert duration_in_prev_phase >= min(fsm.timings.yellow_ms, fsm.timings.priority_yellow_ms)
                 elif last_phase == Phase.ALL_RED_TO_EW:
-                    assert phase == Phase.EW_GREEN
-                    # Invariant S3: All-red duration never shortened
-                    assert duration_in_prev_phase >= fsm.timings.all_red_ms
+                    assert phase in (Phase.EW_GREEN, Phase.NS_GREEN)
+                    assert duration_in_prev_phase >= min(fsm.timings.all_red_ms, fsm.timings.priority_all_red_ms)
                 elif last_phase == Phase.EW_YELLOW:
                     assert phase == Phase.ALL_RED_TO_NS
-                    assert duration_in_prev_phase >= fsm.timings.yellow_ms
+                    assert duration_in_prev_phase >= min(fsm.timings.yellow_ms, fsm.timings.priority_yellow_ms)
                 elif last_phase == Phase.ALL_RED_TO_NS:
-                    assert phase == Phase.NS_GREEN
-                    assert duration_in_prev_phase >= fsm.timings.all_red_ms
+                    assert phase in (Phase.NS_GREEN, Phase.EW_GREEN)
+                    assert duration_in_prev_phase >= min(fsm.timings.all_red_ms, fsm.timings.priority_all_red_ms)
 
                 last_phase = phase
                 phase_start_time = t

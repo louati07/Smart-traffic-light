@@ -32,6 +32,8 @@ from server.app.routers import (
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 heartbeat_task: asyncio.Task | None = None
@@ -59,7 +61,7 @@ async def engine_ticker(engine: PriorityEngine):
     """Tick priority engine every 0.5s to handle release timeouts and conflict queues."""
     while True:
         try:
-            engine.tick()
+            await asyncio.to_thread(engine.tick)
         except Exception as e:
             logger.error("Engine tick error: %s", e)
         await asyncio.sleep(0.5)
@@ -121,7 +123,7 @@ async def lifespan(app: FastAPI):
         mock_esp32_instance = MockESP32Twin(
             firebase_client=fb,
             intersection_id=settings.intersection_id,
-            poll_interval_s=0.2,
+            poll_interval_s=float(settings.timings.get("poll_ms", 1000)) / 1000.0,
             hmac_secret=settings.hmac_secret,
             hmac_enforce=settings.hmac_enforce,
         )

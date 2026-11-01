@@ -23,6 +23,10 @@ export interface IntersectionState {
   phase_elapsed_ms: number;
   uptime_ms: number;
   rejected_cmds?: number;
+  priority_approach?: "N" | "E" | "S" | "W" | null;
+  controller_id?: string;
+  state_age_s?: number | null;
+  state_fresh?: boolean;
 }
 
 export interface PriorityEvent {

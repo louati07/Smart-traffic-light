@@ -24,7 +24,7 @@ export const StatusView: React.FC<StatusViewProps> = ({ apiBase, heartbeat }) =>
   const invariants = [
     { id: "S1", name: "Axis Exclusion", desc: "NS and EW are never simultaneously green.", status: "Verified (Hypothesis)" },
     { id: "S2", name: "Phase Sequencer", desc: "Direct G->G or R->G without Y and ALL_RED clearance is mathematically blocked.", status: "Verified" },
-    { id: "S3", name: "Clearance Invariance", desc: "YELLOW_MS (3s) and ALL_RED_MS (2s) are strictly immutable and never cut.", status: "Verified" },
+    { id: "S3", name: "Clearance Timing", desc: "Normal clearance is 3s yellow + 2s all-red; Wokwi emergency clearance is 2s + 1s after minimum green.", status: "Verified" },
     { id: "S4", name: "Green Minimum Duration", desc: "Green is held for at least MIN_GREEN_MS (5s) before priority preemption.", status: "Verified" },
     { id: "S5", name: "Priority Hold Watchdog", desc: "Priority hold duration is strictly capped at PRIORITY_MAX_MS (30s).", status: "Verified" },
     { id: "S6", name: "Fail-Safe Heartbeat", desc: "Loss of server heartbeat (>10s) triggers autonomous FALLBACK cycle.", status: "Verified" },

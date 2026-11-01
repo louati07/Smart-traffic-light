@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Navbar } from "./components/Navbar";
 import { LiveTwin } from "./components/LiveTwin";
+import { ArchitectureView } from "./components/ArchitectureView";
 import { CompareBattle } from "./components/CompareBattle";
 import { EventsView } from "./components/EventsView";
 import { SecurityView } from "./components/SecurityView";
@@ -13,6 +14,7 @@ const WS_BASE = "ws://localhost:8000/api/v1/ws/state";
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState("twin");
   const [isConnected, setIsConnected] = useState(false);
+  const [stateFresh, setStateFresh] = useState(false);
   const [heartbeat, setHeartbeat] = useState(1);
   const [userRole, setUserRole] = useState("operator");
 
@@ -24,9 +26,11 @@ export const App: React.FC = () => {
     phase_elapsed_ms: 0,
     uptime_ms: 0,
     rejected_cmds: 0,
+    priority_approach: null,
   });
 
   const wsRef = useRef<WebSocket | null>(null);
+  const lastFreshStateAtRef = useRef(0);
 
   // Authenticate default operator role on mount
   useEffect(() => {
@@ -62,6 +66,9 @@ export const App: React.FC = () => {
           try {
             const data = JSON.parse(event.data);
             if (data.state) setState(data.state);
+            const fresh = Boolean(data.state_fresh);
+            setStateFresh(fresh);
+            if (fresh) lastFreshStateAtRef.current = Date.now();
             if (data.heartbeat) setHeartbeat(data.heartbeat);
           } catch (e) {
             console.error("Failed to parse WS state message:", e);
@@ -85,9 +92,11 @@ export const App: React.FC = () => {
 
     connectWs();
 
-    // Polling fallback every 1s
+    // Recover from a WebSocket that stays open but stops delivering fresh state.
     const pollInterval = setInterval(() => {
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      const wsFresh = wsRef.current?.readyState === WebSocket.OPEN &&
+        Date.now() - lastFreshStateAtRef.current <= 1500;
+      if (!wsFresh) {
         const token = localStorage.getItem("token") || "";
         fetch(`${API_BASE}/intersections/i1/state`, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -96,7 +105,9 @@ export const App: React.FC = () => {
           .then((data) => {
             if (data && data.phase) {
               setState(data);
-              setIsConnected(true);
+              setStateFresh(Boolean(data.state_fresh));
+              if (data.state_fresh) lastFreshStateAtRef.current = Date.now();
+              setIsConnected(Boolean(wsRef.current?.readyState === WebSocket.OPEN) || Boolean(data.state_fresh));
             }
           })
           .catch(() => setIsConnected(false));
@@ -111,7 +122,7 @@ export const App: React.FC = () => {
   }, []);
 
   // Manual override handler
-  const handleManualCommand = (cmd: "PRIORITY" | "CLEAR", axis?: "NS" | "EW") => {
+  const handleManualCommand = (cmd: "PRIORITY" | "CLEAR", axis?: "NS" | "EW", approach?: "N" | "E" | "S" | "W") => {
     const token = localStorage.getItem("token") || "";
     fetch(`${API_BASE}/intersections/i1/command`, {
       method: "POST",
@@ -122,6 +133,7 @@ export const App: React.FC = () => {
       body: JSON.stringify({
         cmd,
         axis: cmd === "PRIORITY" ? axis || "NS" : undefined,
+        approach: cmd === "PRIORITY" ? approach || (axis === "EW" ? "E" : "N") : undefined,
         ttl_s: 15,
       }),
     })
@@ -157,8 +169,16 @@ export const App: React.FC = () => {
       />
 
       <main style={{ flex: 1, paddingBottom: "32px" }}>
+        {(!isConnected || !stateFresh) && (
+          <div role="status" style={{ margin: "12px 24px", padding: "10px 14px", borderRadius: 8, background: "rgba(245, 158, 11, 0.14)", color: "#fbbf24", border: "1px solid rgba(245, 158, 11, 0.35)", fontSize: "0.85rem" }}>
+            {!isConnected ? "Live connection lost. Signal display may be out of date." : "Controller state has not refreshed recently. Check the Wokwi to Firebase connection before relying on this display."}
+          </div>
+        )}
         {activeTab === "twin" && (
           <LiveTwin state={state} onManualCommand={handleManualCommand} userRole={userRole} />
+        )}
+        {activeTab === "architecture" && (
+          <ArchitectureView apiBase={API_BASE} isConnected={isConnected} heartbeat={heartbeat} />
         )}
         {activeTab === "compare" && <CompareBattle apiBase={API_BASE} />}
         {activeTab === "events" && <EventsView apiBase={API_BASE} />}
